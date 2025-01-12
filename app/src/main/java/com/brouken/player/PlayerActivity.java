@@ -86,6 +86,7 @@ import androidx.media3.exoplayer.RenderersFactory;
 import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector;
+import androidx.media3.exoplayer.trackselection.MappingTrackSelector;
 import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory;
 import androidx.media3.extractor.ts.TsExtractor;
@@ -570,37 +571,44 @@ public class PlayerActivity extends Activity {
         }
         playerView.setBrightnessControl(mBrightnessControl);
 
-        final LinearLayout exoBasicControls = playerView.findViewById(R.id.exo_basic_controls);
-        final ImageButton exoSubtitle = exoBasicControls.findViewById(R.id.exo_subtitle);
-        exoBasicControls.removeView(exoSubtitle);
+        // Just find the buttons directly from playerView
+        final ImageButton exoSubtitle = playerView.findViewById(R.id.exo_subtitle);
+        exoSettings = playerView.findViewById(R.id.exo_settings);
+        final ImageButton exoRepeat = playerView.findViewById(R.id.exo_repeat_toggle);
 
-        exoSettings = exoBasicControls.findViewById(R.id.exo_settings);
-        exoBasicControls.removeView(exoSettings);
-        final ImageButton exoRepeat = exoBasicControls.findViewById(R.id.exo_repeat_toggle);
-        exoBasicControls.removeView(exoRepeat);
-        //exoBasicControls.setVisibility(View.GONE);
+        // Remove buttons from their current parent if they have one
+        if (exoSubtitle.getParent() != null) {
+            ((ViewGroup)exoSubtitle.getParent()).removeView(exoSubtitle);
+        }
+        if (exoSettings.getParent() != null) {
+            ((ViewGroup)exoSettings.getParent()).removeView(exoSettings);
+        }
+        if (exoRepeat.getParent() != null) {
+            ((ViewGroup)exoRepeat.getParent()).removeView(exoRepeat);
+        }
 
-        exoSettings.setOnLongClickListener(view -> {
-            //askForScope(false, false);
-            Intent intent = new Intent(this, SettingsActivity.class);
-            startActivityForResult(intent, REQUEST_SETTINGS);
-            return true;
+        // Set up click listeners
+        exoSettings.setOnClickListener(view -> {
+            Log.d("PlayerActivity", "Settings button clicked");
+            cycleAudioTracks();
         });
 
+        // Keep long click for system captions
         exoSubtitle.setOnLongClickListener(v -> {
             enableRotation();
             safelyStartActivityForResult(new Intent(Settings.ACTION_CAPTIONING_SETTINGS), REQUEST_SYSTEM_CAPTIONS);
             return true;
         });
 
+        // Change click to cycle subtitles
+        exoSubtitle.setOnClickListener(v -> cycleSubtitleTracks());
+
         updateButtons(false);
 
         final HorizontalScrollView horizontalScrollView = (HorizontalScrollView) getLayoutInflater().inflate(R.layout.controls, null);
         final LinearLayout controls = horizontalScrollView.findViewById(R.id.controls);
 
-        controls.addView(buttonOpen);
         controls.addView(exoSubtitle);
-        controls.addView(buttonAspectRatio);
         if (Utils.isPiPSupported(this) && buttonPiP != null) {
             controls.addView(buttonPiP);
         }
@@ -612,11 +620,14 @@ public class PlayerActivity extends Activity {
         }
         controls.addView(exoSettings);
 
-        exoBasicControls.addView(horizontalScrollView);
+        // Find the center controls
+        final LinearLayout centerControls = playerView.findViewById(R.id.exo_center_controls);
 
-        if (Build.VERSION.SDK_INT > 23) {
-            horizontalScrollView.setOnScrollChangeListener((view, i, i1, i2, i3) -> resetHideCallbacks());
+        // Add the horizontal scroll view to center controls
+        if (horizontalScrollView.getParent() != null) {
+            ((ViewGroup)horizontalScrollView.getParent()).removeView(horizontalScrollView);
         }
+        centerControls.addView(horizontalScrollView);
 
         playerView.setControllerVisibilityListener(new PlayerView.ControllerVisibilityListener() {
             @Override
@@ -962,13 +973,40 @@ public class PlayerActivity extends Activity {
             return true;
         }
 
+        // Handle 10-minute skips
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            switch (event.getKeyCode()) {
+                case KeyEvent.KEYCODE_CHANNEL_UP:
+                case KeyEvent.KEYCODE_PAGE_UP:
+                    if (player != null) {
+                        long skipForwardMs = 10 * 60 * 1000;
+                        long newPosition = player.getCurrentPosition() + skipForwardMs;
+                        if (newPosition <= player.getDuration()) {
+                            player.seekTo(newPosition);
+                            showToast("Skipped Forward 10 minutes");
+                        }
+                    }
+                    return true;
+
+                case KeyEvent.KEYCODE_CHANNEL_DOWN:
+                case KeyEvent.KEYCODE_PAGE_DOWN:
+                    if (player != null) {
+                        long skipBackwardMs = 10 * 60 * 1000;
+                        long newPosition = player.getCurrentPosition() - skipBackwardMs;
+                        player.seekTo(Math.max(0, newPosition));
+                        showToast("Skipped Backward 10 minutes");
+                    }
+                    return true;
+            }
+        }
+
         if (isTvBox && !controllerVisibleFully) {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 onKeyDown(event.getKeyCode(), event);
             } else if (event.getAction() == KeyEvent.ACTION_UP) {
                 onKeyUp(event.getKeyCode(), event);
             }
-            return true;
+            return true; 
         } else {
             return super.dispatchKeyEvent(event);
         }
@@ -2338,9 +2376,163 @@ public class PlayerActivity extends Activity {
             
             sendBroadcast(intent);
             
-            // Add debug log for Logcat
-            Log.d("PlayerActivity", String.format("Broadcast - Position: %dms, Duration: %dms, Progress: %d%%", 
-                position, duration, percentage));
         }
+    }
+
+    // Method to cycle through audio tracks
+    private void cycleAudioTracks() {
+        if (player == null || trackSelector == null) {
+            Log.d("PlayerActivity", "Player or trackSelector is null");
+            return;
+        }
+
+        // Get the current tracks
+        Tracks currentTracks = player.getCurrentTracks();
+        List<Tracks.Group> audioGroups = new ArrayList<>();
+        
+        for (Tracks.Group group : currentTracks.getGroups()) {
+            if (group.getType() == C.TRACK_TYPE_AUDIO) {
+                audioGroups.add(group);
+                
+                TrackGroup trackGroup = group.getMediaTrackGroup();
+                for (int i = 0; i < trackGroup.length; i++) {
+                    Format format = trackGroup.getFormat(i);
+                }
+            }
+        }
+        
+        if (audioGroups.isEmpty()) {
+            Log.d("PlayerActivity", "No audio tracks found");
+            return;
+        }
+
+        // Find the currently selected track
+        int currentGroupIndex = -1;
+        int currentTrackIndex = -1;
+        
+        for (int groupIndex = 0; groupIndex < audioGroups.size(); groupIndex++) {
+            Tracks.Group group = audioGroups.get(groupIndex);
+            for (int trackIndex = 0; trackIndex < group.length; trackIndex++) {
+                if (group.isTrackSelected(trackIndex)) {
+                    currentGroupIndex = groupIndex;
+                    currentTrackIndex = trackIndex;
+                    Log.d("PlayerActivity", String.format("Current selection - Group: %d, Track: %d", 
+                        currentGroupIndex, currentTrackIndex));
+                    break;
+                }
+            }
+        }
+
+        if (currentGroupIndex == -1 || currentTrackIndex == -1) {
+            Log.d("PlayerActivity", "No audio track currently selected");
+            return;
+        }
+
+        int nextGroupIndex = currentGroupIndex;
+        int nextTrackIndex = (currentTrackIndex + 1) % audioGroups.get(currentGroupIndex).length;
+        
+        if (nextTrackIndex == 0) {
+            nextGroupIndex = (currentGroupIndex + 1) % audioGroups.size();
+        }
+
+        Tracks.Group nextGroup = audioGroups.get(nextGroupIndex);
+        TrackGroup nextTrackGroup = nextGroup.getMediaTrackGroup();
+        Format nextFormat = nextTrackGroup.getFormat(nextTrackIndex);
+        
+        Log.d("PlayerActivity", String.format("Switching to - Group: %d, Track: %d, Language: %s", 
+            nextGroupIndex, nextTrackIndex, nextFormat.language));
+
+        // Create and apply the track selection override
+        TrackSelectionOverride override = new TrackSelectionOverride(
+            nextTrackGroup, Collections.singletonList(nextTrackIndex));
+        
+        TrackSelectionParameters.Builder builder = player.getTrackSelectionParameters().buildUpon();
+        builder.setOverrideForType(override);
+        player.setTrackSelectionParameters(builder.build());
+
+        // Show a toast with the new track info
+        String trackInfo = nextFormat.language != null ? nextFormat.language : 
+                          nextFormat.label != null ? nextFormat.label :
+                          String.format("Track %d", nextTrackIndex + 1);
+        Toast.makeText(this, "Audio: " + trackInfo, Toast.LENGTH_SHORT).show();
+    }
+
+    private void showToast(String message) {
+        if (message == null || message.isEmpty()) return;
+        Toast.makeText(getApplicationContext(), message, Toast.LENGTH_SHORT).show();
+    }
+
+    private void cycleSubtitleTracks() {
+        if (player == null) {
+            Log.d("PlayerActivity", "cycleSubtitleTracks: player is null");
+            return;
+        }
+
+        // Get current tracks
+        Tracks tracks = player.getCurrentTracks();
+        Log.d("PlayerActivity", "cycleSubtitleTracks: got current tracks");
+        
+        // Find text tracks
+        List<Tracks.Group> textTrackGroups = new ArrayList<>();
+        for (Tracks.Group trackGroup : tracks.getGroups()) {
+            if (trackGroup.getType() == C.TRACK_TYPE_TEXT) {
+                textTrackGroups.add(trackGroup);
+                Format format = trackGroup.getTrackFormat(0);
+                Log.d("PlayerActivity", String.format("Found track group: language=%s, label=%s", 
+                    format.language, format.label));
+            }
+        }
+        
+        if (textTrackGroups.isEmpty()) {
+            Toast.makeText(this, "No subtitles available", Toast.LENGTH_SHORT).show();
+            Log.d("PlayerActivity", "No text track groups found");
+            return;
+        }
+
+        // Get current track selection parameters
+        TrackSelectionParameters params = player.getTrackSelectionParameters();
+        
+        // Find current selection
+        int currentGroupIndex = -1;
+        for (int i = 0; i < textTrackGroups.size(); i++) {
+            Tracks.Group group = textTrackGroups.get(i);
+            for (TrackSelectionOverride override : params.overrides.values()) {
+                if (override.mediaTrackGroup.equals(group.getMediaTrackGroup())) {
+                    currentGroupIndex = i;
+                    Log.d("PlayerActivity", "Current selection: group " + i + 
+                        " (" + group.getTrackFormat(0).label + ")");
+                    break;
+                }
+            }
+            if (currentGroupIndex >= 0) break;
+        }
+
+        // Move to next track
+        TrackSelectionParameters.Builder builder = params.buildUpon();
+        builder.clearOverrides();  // Clear existing overrides
+        
+        if (currentGroupIndex == -1) {
+            // No current selection, select first track
+            String label = textTrackGroups.get(0).getTrackFormat(0).label;
+            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                   .addOverride(new TrackSelectionOverride(
+                       textTrackGroups.get(0).getMediaTrackGroup(), 0));
+            Toast.makeText(this, "Subtitles: " + label, Toast.LENGTH_SHORT).show();
+        } else if (currentGroupIndex + 1 < textTrackGroups.size()) {
+            // Select next track
+            Tracks.Group nextGroup = textTrackGroups.get(currentGroupIndex + 1);
+            String label = nextGroup.getTrackFormat(0).label;
+            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                   .addOverride(new TrackSelectionOverride(
+                       nextGroup.getMediaTrackGroup(), 0));
+            Toast.makeText(this, "Subtitles: " + label, Toast.LENGTH_SHORT).show();
+        } else {
+            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true);
+            Toast.makeText(this, "Subtitles: Off", Toast.LENGTH_SHORT).show();
+        }
+        
+        // Apply new selection
+        TrackSelectionParameters newParams = builder.build();
+        player.setTrackSelectionParameters(newParams);
     }
 }
