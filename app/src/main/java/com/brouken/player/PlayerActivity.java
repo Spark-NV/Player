@@ -743,6 +743,9 @@ public class PlayerActivity extends Activity {
     @Override
     public void onBackPressed() {
         restorePlayStateAllowed = false;
+        player.stop();
+        player.seekTo(0);
+        releasePlayer();
         super.onBackPressed();
     }
 
