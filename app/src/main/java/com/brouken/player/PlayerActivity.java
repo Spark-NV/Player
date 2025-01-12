@@ -32,6 +32,8 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcelable;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.DocumentsContract;
 import android.provider.Settings;
 import android.text.TextUtils;
@@ -39,6 +41,7 @@ import android.util.Base64;
 import android.util.DisplayMetrics;
 import android.util.Rational;
 import android.util.TypedValue;
+import android.util.Log;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
@@ -213,6 +216,11 @@ public class PlayerActivity extends Activity {
             Utils.toggleSystemUi(PlayerActivity.this, playerView, false);
         }
     };
+
+    // Add these as class fields
+    private static final int PROGRESS_UPDATE_INTERVAL = 5000; // 5 seconds
+    private Handler progressUpdateHandler;
+    private Runnable progressUpdateRunnable;
 
     @RequiresApi(api = Build.VERSION_CODES.O)
     @Override
@@ -1339,6 +1347,24 @@ public class PlayerActivity extends Activity {
         player.addListener(playerListener);
         player.prepare();
 
+        // Add progress update handler here
+        if (progressUpdateHandler == null) {
+            progressUpdateHandler = new Handler(Looper.getMainLooper());
+        }
+        
+        if (progressUpdateRunnable == null) {
+            progressUpdateRunnable = new Runnable() {
+                @Override
+                public void run() {
+                    sendProgressBroadcast();
+                    progressUpdateHandler.postDelayed(this, PROGRESS_UPDATE_INTERVAL);
+                }
+            };
+        }
+        
+        // Start progress updates
+        progressUpdateHandler.post(progressUpdateRunnable);
+
         if (restorePlayState) {
             restorePlayState = false;
             playerView.showController();
@@ -2287,6 +2313,31 @@ public class PlayerActivity extends Activity {
             } else {
                 buttonRotation.setImageResource(R.drawable.ic_screen_landscape_24dp);
             }
+        }
+    }
+
+    // Add this method to create the broadcast
+    private void sendProgressBroadcast() {
+        if (player != null && player.isPlaying()) {
+            Intent intent = new Intent("com.brouken.player.PLAYBACK_UPDATE");
+            long position = player.getCurrentPosition();
+            long duration = player.getDuration();
+            
+            // Calculate percentage (0-100)
+            long percentage = 0;
+            if (duration > 0) {
+                percentage = (position * 100) / duration;
+            }
+            
+            intent.putExtra("position", position);
+            intent.putExtra("duration", duration);
+            intent.putExtra("percentage", percentage);
+            
+            sendBroadcast(intent);
+            
+            // Add debug log for Logcat
+            Log.d("PlayerActivity", String.format("Broadcast - Position: %dms, Duration: %dms, Progress: %d%%", 
+                position, duration, percentage));
         }
     }
 }
