@@ -117,8 +117,6 @@ import java.util.concurrent.TimeUnit;
 
 public class PlayerActivity extends Activity {
 
-    private static final String TAG = "PlayerActivity";
-
     private PlayerListener playerListener;
     private BroadcastReceiver mReceiver;
     private AudioManager mAudioManager;
@@ -262,13 +260,6 @@ public class PlayerActivity extends Activity {
         final String action = launchIntent.getAction();
         final String type = launchIntent.getType();
 
-        Log.d(TAG, "onCreate - Intent received: action=" + action + ", type=" + type);
-        if (launchIntent.getExtras() != null) {
-            for (String key : launchIntent.getExtras().keySet()) {
-                Log.d(TAG, "Intent extra - " + key + ": " + launchIntent.getExtras().get(key));
-            }
-        }
-
         if ("com.brouken.player.action.SHORTCUT_VIDEOS".equals(action)) {
             openFile(Utils.getMoviesFolderUri());
         } else if (Intent.ACTION_SEND.equals(action) && "text/plain".equals(type)) {
@@ -329,9 +320,7 @@ public class PlayerActivity extends Activity {
                     intentReturnResult = bundle.getBoolean(API_RETURN_RESULT);
 
                     if (bundle.containsKey(API_POSITION)) {
-                        int position = bundle.getInt(API_POSITION);
-                        Log.d(TAG, "Updating position from intent: " + position);
-                        mPrefs.updatePosition((long) position);
+                        mPrefs.updatePosition((long) bundle.getInt(API_POSITION));
                     }
                 }
             }
@@ -600,7 +589,7 @@ public class PlayerActivity extends Activity {
 
         // Set up click listeners
         exoSettings.setOnClickListener(view -> {
-            Log.d(TAG, "Settings button clicked");
+            Log.d("PlayerActivity", "Settings button clicked");
             cycleAudioTracks();
         });
 
@@ -765,16 +754,7 @@ public class PlayerActivity extends Activity {
     @Override
     public void onBackPressed() {
         restorePlayStateAllowed = false;
-        if (player != null && player.isPlaying()) {
-            // Save current position before stopping
-            long currentPosition = player.getCurrentPosition();
-            mPrefs.updatePosition(currentPosition);
-            Log.d(TAG, "onBackPressed: Saving position: " + currentPosition);
-        }
         player.stop();
-        // Remove the seekTo(0) call as it's interfering with position restoration
-        // player.seekTo(0);
-        releasePlayer();
         super.onBackPressed();
     }
 
@@ -1351,12 +1331,6 @@ public class PlayerActivity extends Activity {
                 MediaItem.SubtitleConfiguration subtitle = SubtitleUtils.buildSubtitle(this, mPrefs.subtitleUri, null, true);
                 mediaItemBuilder.setSubtitleConfigurations(Collections.singletonList(subtitle));
             }
-
-            Log.d(TAG, "initializePlayer - Setting media item with position: " + mPrefs.getPosition());
-            Log.d(TAG, "initializePlayer - Media URI: " + mPrefs.mediaUri);
-            Log.d(TAG, "initializePlayer - API Access: " + apiAccess);
-            Log.d(TAG, "initializePlayer - API Access Partial: " + apiAccessPartial);
-            
             player.setMediaItem(mediaItemBuilder.build(), mPrefs.getPosition());
 
             try {
@@ -1534,12 +1508,6 @@ public class PlayerActivity extends Activity {
         @SuppressLint("SourceLockedOrientationActivity")
         @Override
         public void onPlaybackStateChanged(int state) {
-            Log.d(TAG, "onPlaybackStateChanged: state=" + state);
-            if (player != null) {
-                Log.d(TAG, "Current position: " + player.getCurrentPosition() + 
-                          ", Duration: " + player.getDuration());
-            }
-
             boolean isNearEnd = false;
             final long duration = player.getDuration();
             if (duration != C.TIME_UNSET) {
