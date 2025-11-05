@@ -189,6 +189,8 @@ public class PlayerActivity extends Activity {
 
     public static boolean restoreControllerTimeout = false;
     public static boolean shortControllerTimeout = false;
+    private boolean wasPlaying = false;
+    private boolean isReleasingPlayer = false;
 
     final Rational rationalLimitWide = new Rational(239, 100);
     final Rational rationalLimitTall = new Rational(100, 239);
@@ -754,6 +756,10 @@ public class PlayerActivity extends Activity {
     @Override
     public void onBackPressed() {
         restorePlayStateAllowed = false;
+        isReleasingPlayer = true;
+        if (player != null && player.isPlaying()) {
+            sendPlaybackStoppedBroadcast();
+        }
         player.stop();
         super.onBackPressed();
     }
@@ -1262,6 +1268,10 @@ public class PlayerActivity extends Activity {
         }
 
         player = playerBuilder.build();
+        
+        // Reset playback state tracking for new player
+        wasPlaying = false;
+        isReleasingPlayer = false;
 
         AudioAttributes audioAttributes = new AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -1441,6 +1451,14 @@ public class PlayerActivity extends Activity {
         }
 
         if (player != null) {
+            // Set flag to prevent pause/start broadcasts during release
+            isReleasingPlayer = true;
+            
+            // Broadcast playback stopped before releasing player
+            if (player.isPlaying()) {
+                sendPlaybackStoppedBroadcast();
+            }
+            
             notifyAudioSessionUpdate(false);
 
 //            mediaSession.setActive(false);
@@ -1456,6 +1474,11 @@ public class PlayerActivity extends Activity {
             player.release();
             player = null;
         }
+        
+        // Reset flag after release
+        isReleasingPlayer = false;
+        wasPlaying = false;
+        
         titleView.setVisibility(View.GONE);
         updateButtons(false);
     }
@@ -1499,6 +1522,23 @@ public class PlayerActivity extends Activity {
                     playerView.setControllerShowTimeoutMs(-1);
                 }
             }
+
+            // Broadcast playback state changes
+            if (!isReleasingPlayer) {
+                if (isPlaying && !wasPlaying) {
+                    // Playback started (from paused or initial start)
+                    sendPlaybackStartedBroadcast();
+                } else if (!isPlaying && wasPlaying && player != null) {
+                    // Playback paused - check if player wants to play (getPlayWhenReady) to distinguish pause from stop
+                    // If playWhenReady is false, it means we're paused (user wants to pause)
+                    // If playWhenReady is true but not playing, it might be buffering or other temporary state
+                    if (!player.getPlayWhenReady() && player.getPlaybackState() != Player.STATE_IDLE && player.getPlaybackState() != Player.STATE_ENDED) {
+                        sendPlaybackPausedBroadcast();
+                    }
+                }
+            }
+            
+            wasPlaying = isPlaying;
 
             if (!isPlaying) {
                 PlayerActivity.locked = false;
@@ -1609,6 +1649,10 @@ public class PlayerActivity extends Activity {
                 }
             } else if (state == Player.STATE_ENDED) {
                 playbackFinished = true;
+                // Set flag to prevent pause broadcast from onIsPlayingChanged
+                isReleasingPlayer = true;
+                // Broadcast playback stopped when playback ends naturally
+                sendPlaybackStoppedBroadcast();
                 if (apiAccess) {
                     finish();
                 }
@@ -2375,6 +2419,42 @@ public class PlayerActivity extends Activity {
             sendBroadcast(intent);
             
         }
+    }
+
+    // Broadcast when playback starts (including resume from pause)
+    private void sendPlaybackStartedBroadcast() {
+        Intent intent = new Intent("com.brouken.player.PLAYBACK_STARTED");
+        if (player != null) {
+            long position = player.getCurrentPosition();
+            long duration = player.getDuration();
+            intent.putExtra("position", position);
+            intent.putExtra("duration", duration);
+        }
+        sendBroadcast(intent);
+    }
+
+    // Broadcast when playback is paused
+    private void sendPlaybackPausedBroadcast() {
+        Intent intent = new Intent("com.brouken.player.PLAYBACK_PAUSED");
+        if (player != null) {
+            long position = player.getCurrentPosition();
+            long duration = player.getDuration();
+            intent.putExtra("position", position);
+            intent.putExtra("duration", duration);
+        }
+        sendBroadcast(intent);
+    }
+
+    // Broadcast when playback is stopped (before player closes)
+    private void sendPlaybackStoppedBroadcast() {
+        Intent intent = new Intent("com.brouken.player.PLAYBACK_STOPPED");
+        if (player != null) {
+            long position = player.getCurrentPosition();
+            long duration = player.getDuration();
+            intent.putExtra("position", position);
+            intent.putExtra("duration", duration);
+        }
+        sendBroadcast(intent);
     }
 
     // Method to cycle through audio tracks
